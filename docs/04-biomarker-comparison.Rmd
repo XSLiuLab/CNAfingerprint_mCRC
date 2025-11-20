@@ -1,0 +1,221 @@
+---
+title: "PART 4: Biomarker comparison"
+author: ["Jinyu Wang, Ziyu Tao, Xue-Song Liu (Corresponding author)"]
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+  self_contained: false
+# toc_depth: 3
+# bibliography: ref.bib
+link-citations: yes
+editor_options: 
+  markdown: 
+  wrap: 72
+---
+
+The performance of CNA fingerprint in oxaliplatin response prediction was compared with:
+--HRD status
+--KRAS mutation
+--aneuploidy
+--primary tumor location. 
+
+## 4.1 HRD status and aneuploidy
+
+We use R package HRDCNA(Using the threshold values 0.2 recommended by the tool guideline. see 1.2 CNA features calling, function CNF_call) and scarHRD to assess the HRD status score; 
+
+```{r, eval=FALSE}
+# library(devtools)
+# install_bitbucket('sequenza_tools/sequenza')
+# install_github('sztup/scarHRD',build_vignettes = TRUE)
+# Note that this R package installation is detailed at https://github.com/sztup/scarHRD
+
+library(scarHRD)
+
+#input format
+#SampleID	Chromosome	Start_position	End_position	total_cn	A_cn	B_cn	ploidy
+#SamplePatient1       chr1          14574       952448        5    0    5
+
+exampleSeg <- readRDS("../data/exampleSeg.rds")
+
+# Assuming a ploidy of 5
+ploidy=5
+data <- data.frame(exampleSeg[,c(5,1:4)],
+                   A_cn= exampleSeg$segVal,
+                   B_cn = 0,
+                   ploidy = ploidy)
+
+colnames(data) <- c("SampleID","Chromosome","Start_position","End_position",
+                    "total_cn","A_cn","B_cn","ploidy")
+
+data %>%
+  group_by(SampleID) %>%
+  group_split() %>% 
+  walk(~ {
+    group_name <- unique(.x$SampleID)
+    # save as csv
+    write.table(.x, file = paste0("../data/scarHRD/",group_name, ".txt"), 
+                row.names = FALSE,quote = F,sep = "\t")
+  })
+
+csv_files <- list.files(path = "../data/scarHRD/", 
+                        pattern = "\\.txt$", full.names = TRUE)
+score <- data.frame()
+for(file in csv_files){
+  sample <- gsub(".txt","",basename(file))
+  scar_train <- scar_score(file,reference = "grch38", seqz=FALSE)
+  df <- data.frame(scar_train,sample=sample)
+  score <- rbind(score,df)
+}
+
+```
+
+R package AneuploidyScore was used to calculate the aneuploidy score (total number of arm level gains/losses).
+
+Note that this R package only supports hg19, so we first need to perform a genome version conversion
+
+```{r,eval=FALSE}
+# devtools::install_github("quevedor2/aneuploidy_score", ref='master')
+library(GenomicRanges)
+library(liftOver)
+library(AneuploidyScore)
+
+cytoarm <- cytobandToArm(ucsc.hg19.cytoband)
+ch <- import.chain('../data/hg38ToHg19.over.chain')
+
+exampleSeg <- readRDS("../data/exampleSeg.rds")
+# Assuming a ploidy of 5
+ploidy=5
+
+out <- data.frame()
+
+for (i in unique(exampleSeg$sample)) {
+  segdata <- exampleSeg[exampleSeg$sample==i,]
+  #ploidy=pp[which(pp$sample==i),"polidy"]
+  ploidy=5
+  seg <- GRanges(
+    #seqnames = paste0("chr",segdata$Chromosome),
+    seqnames = segdata$chromosome,
+    ranges = IRanges(start = segdata$start,end = segdata$end),
+    strand = "*",
+    TCN = segdata$segVal
+  )
+  hg19.seg <- liftOver(seg, ch)
+  seg_caa <- getCAA(hg19.seg, cytoarm, tcn_col="TCN", classifyCN=TRUE,
+                    ploidy=ploidy, threshold=0.5)
+  caa <- reduceArms(seg_caa, caa_method=c('arm', 'seg'),
+                    arm_ids = c('p', 'q'))
+  
+  result <- data.frame(sample=i,
+                       t(caa[,1]),
+                       aneuploidy_score = colSums(abs(caa), na.rm = TRUE))
+  out <- rbind(out,result[1,])
+}
+#Removal of sex chromosomes
+aneuploidy_score <- rowSums(abs(out[,2:45]),na.rm = TRUE)
+aneuploidy_score <- data.frame(sample=out$sample,AS=aneuploidy_score)
+
+```
+
+
+## 4.2 Comparison and application
+
+
+```{r,eval=FALSE}
+library(caret)
+
+all_test <- read.csv("../data/all_test.csv",check.names = F)
+# from change
+score_turn <- function(data,type){
+  if(type == "soft"){
+    data$HRDCNAScore <- 1-data$HRDCNAScore
+    data$scarHRD <- max(data$scarHRD)-data$scarHRD
+    data$Aneuploidy_score <- (max(data$Aneuploidy_score)-data$Aneuploidy_score)/39
+  }
+  if(type== "hard"){
+    data$CNAfingerprint <- ifelse(data$CNAfingerprint>0.58,1,0)
+    data$HRDCNAScore <- ifelse(data$HRDCNAScore>0.2,0,1)
+    data$scarHRD <- (data$scarHRD- min(data$scarHRD))/(max(data$scarHRD)-min(data$scarHRD))
+    data$scarHRD <- 1-data$scarHRD
+    scarcut <- quantile(data$scarHRD,probs=0.75)
+    data$scarHRD <- ifelse(data$scarHRD > scarcut,1,0)
+    #
+    data$Aneuploidy_score <- data$Aneuploidy_score/39
+    as_cut <- quantile(data$Aneuploidy_score,probs=0.75)
+    data$Aneuploidy_score <- ifelse(data$Aneuploidy_score > as_cut,0,1)
+    data$`Tumor site` <- ifelse(data$`Tumor site`== 'Right side',0,1)
+  }
+  return(data)
+}
+
+
+score <- c("CNAfingerprint","HRDCNAScore","scarHRD","Aneuploidy_score","Tumor site")
+
+table <- data.frame(matrix(nrow = 12))
+
+for (set in unique(all_test$batch)) {
+  data <- all_test[which(all_test$batch==set),]
+  data <- score_turn(data,type="hard")
+  for (i in score) {
+    df <- data[,c("lable",i)]
+    colnames(df)[2] <- "score"
+    cm <- caret::confusionMatrix(data=factor(df$score,levels = c(0,1)),
+                         reference=factor(df$lable,levels = c(0,1)),
+                         positive="1")
+    
+    list <- as.data.frame(cm$byClass)
+    
+    list["Accuracy",1] <- cm$overall[1]
+    colnames(list)[1] <- paste0(set,"_",i)
+    
+    table <- cbind(table,list)
+  }
+}
+
+table <- table[,-1]
+saveRDS(table,file = "../data/allscore_CMtable.rds")
+
+```
+
+Heat maps
+```{r,eval=TRUE,fig.width=5,fig.height=8}
+library(pheatmap)
+allscore_CMtable <- readRDS("../data/allscore_CMtable.rds")
+
+data <- t(allscore_CMtable[c(12,1,2,5:7),])
+
+pheatmap(data,
+         cluster_rows=F,
+         cluster_cols = F,
+         angle_col = "45",
+         color = colorRampPalette(c("#3e92a3", "white", "#ff5335"))(100),
+         border_color = "white",
+         number_format = "%.2f",
+         display_numbers = round(data, 2),
+         legend=T
+         )
+
+
+```
+
+
+## 4.3 Compare to KRAS mutation
+
+Limited by sample size, we will observe the predictive effect of KRAS mutations on chemotherapy response in all samples annotated with KRAS mutations in the 271 sample.
+
+A total of 95 patients had KRAS mutations and 117 patients did not detect any KRAS,BRAF or NRAS mutations
+ 
+
+```{r, eval=TRUE}
+
+data <- read.csv("../data/mut.csv")
+data$type <- ifelse(data$Response.to.chemotherapy=="PD",0,1)
+data$mut <- ifelse(data$Hotspot.mutation=="WT",1,0)
+
+cm <- caret::confusionMatrix(data=factor(data$type),
+                             reference=factor(data$mut),positive="1")
+
+print(paste0("Accuracy of KRASmutation is ",cm$overall[1]))
+#
+cm$byClass
+```
+

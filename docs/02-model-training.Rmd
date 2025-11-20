@@ -1,0 +1,374 @@
+---
+title: "PART 2: Model training"
+author: ["Ziyu Tao, Jinyu Wang, Xue-Song Liu (Corresponding author)"]
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+  self_contained: false
+# toc_depth: 3
+# bibliography: ref.bib
+link-citations: yes
+editor_options: 
+  markdown: 
+  wrap: 72
+---
+
+## 2.1  Internal benchmark
+
+We performed internal benchmark to compare the performance of different CNA feature sets and 5 different machine learning models (1) extreme gradient boosting (XGBoost), (2) neural networks (NNET), (3) random forest (RF), (4) Naive bayes, (5) light gradient boosting machine (LGBM) in the training dataset. 
+
+The CNA information we compare here is the CNA signature reported by [Drew et.al](10.1038/s41586-022-04789-9)
+
+Example calling process of  CNA signature reported by Drews et.al.
+```{r,eval=FALSE}
+# devtools::install_github("markowetzlab/CINSignatureQuantification", build_vignettes = TRUE, dependencies = TRUE)
+# input format
+# chromosome	start	end	segVal	sample
+# 1	61735	249224388	3.1	TCGA-BT-A20P
+
+library(tidyverse)
+library(CINSignatureQuantification)
+
+exampleSeg <- readRDS("../data/exampleSeg.rds")
+
+mySigs = quantifyCNSignatures(exampleSeg)
+D_sig <- mySigs@activities[["rawAct0"]]
+
+#Low segment counts: Features not computed for 8 of 121 samples - see `getSampleFeatures()`
+```
+
+All feature-model combinations were feature-selected and trained and then banchmarked by five-fold cross-validation. here we only show the training process of XGBoost in next section.
+
+
+## 2.2 Model Training 
+
+For model training, we train the model with the help of R package mlr3, we only provide the training code here.
+Create our own task:
+
+```{r,eval=FALSE}
+library(mlr3verse)
+library(ggplot2)
+
+# You have prepared your training data (feature-label data frames).
+train_cnf 
+
+data = train_cnf %>%
+  mutate(lable = ifelse(train_cnf$lable=="PD",0,1))
+colnames(data)[1:(ncol(data)-1)] <- paste0("feature",1:(ncol(data)-1))
+
+# keep the feature names
+featurename <- colnames(train_cnf)[1:(ncol(train_cnf)-1)]
+names(featurename) <- paste0("feature",1:(ncol(data)-2))
+# saveRDS(featurename,file = "../data/featurename.rds")
+
+# task
+tsk_train = as_task_classif(data, target = "lable",positive = '1')
+
+```
+
+we use the property “importance” of XGBoost for perform initial feature selection.
+```{r,eval=FALSE}
+set.seed(2025)
+learner = lrn("classif.xgboost",predict_type = "prob")
+filter = flt("importance", learner = learner)
+filter$calculate(tsk_train)
+diffeaure <- imp$feature
+
+tsk_train$select(diffeaure)
+
+```
+
+Then, tsk_train keep 90 features, we use a grid search to determine the parameter: "nrounds".
+
+```{r,eval=FALSE}
+set.seed(2025)
+learner = lrn("classif.xgboost",predict_type = "prob",eta=0.1,
+              nrounds = to_tune(80, 250),
+              nthread = 20)
+
+instance = tune(
+  tuner = mlr3tuning::tnr("grid_search",resolution = 170, batch_size = 10),
+  task = tsk_train,
+  learner = learner,
+  resampling = rsmp("cv", folds = 5),
+  measures = msr("classif.auc"),
+  terminator = trm("stagnation", iters = 200, threshold = 0.05)
+)
+
+# results get nrounds = 132
+instance$result_learner_param_vals
+
+# other parameters
+set.seed(2025)
+learner = lrn("classif.xgboost",predict_type = "prob",nrounds = 132,
+              nthread = 20)
+
+search_space <- ps(
+  eta = p_dbl(lower = .001, upper = .2),
+  max_depth = p_int(lower = 1, upper = 10),
+  # max_delta_step = p_int(lower = 1,upper = 10),
+  alpha = p_dbl(lower = 0,upper = 0.5),
+  lambda = p_dbl(lower = 0,upper = 1),
+  gamma = p_int(lower = 0,upper = 6),
+  min_child_weight = p_int(lower = 1, upper = 10),
+  subsample = p_dbl(lower = .8, upper = 1)
+  # colsample_bytree = p_dbl( lower = .5, upper = 1)
+  # colsample_bylevel = p_dbl(lower = .5, upper = 1)
+)
+
+instance = tune(
+  tuner = mlr3tuning::tnr("random_search",batch_size = 10),
+  task = tsk_train,
+  learner = learner,
+  search_space = search_space,
+  resampling = rsmp("cv", folds = 5),
+  measures = msr("classif.auc"),
+  terminator = trm("stagnation", iters = 200, threshold = 0.01)
+)
+
+# Model parameter update
+set.seed(2025)
+learner$param_set$values = instance$result_learner_param_vals
+
+```
+
+For other parameter mediation, given the large number of combinations, we use "random_search".you can also use"grid_search",but it would be advisable to first conduct parameter searches for a subset, then utilize the optimized subset to search for other parameters, rather than running all parameters simultaneously.
+
+After we update the parameters,the model also performs feature selection, 
+```{r,eval=FALSE}
+importance = as.data.table(learner$importance(), keep.rownames = TRUE)
+colnames(importance) = c("Feature", "Importance")
+importance$Featurename <- featurename[importance$Feature]
+
+```
+
+Next, we adjust again based on these 7 features, the adjustment process is the same as above.
+
+```{r,eval=FALSE}
+diffeaure <- importance$Feature
+#saveRDS(diffeaure,file = "../data/xgb_feature7.rds")
+
+tsk_train$select(diffeaure)
+
+set.seed(2025)
+learner = lrn("classif.xgboost",predict_type = "prob",eta=0.1,
+              nrounds = to_tune(80, 250),
+              nthread = 20)
+
+instance = tune(
+  tuner = mlr3tuning::tnr("grid_search",resolution = 170, batch_size = 10),
+  task = tsk_train,
+  learner = learner,
+  resampling = rsmp("cv", folds = 5),
+  measures = msr("classif.auc"),
+  terminator = trm("stagnation", iters = 200, threshold = 0.05)
+)
+
+# results get nrounds = 83
+instance$result_learner_param_vals
+
+# other parameters
+set.seed(2025)
+learner = lrn("classif.xgboost",predict_type = "prob",nrounds = 83,
+              nthread = 20)
+
+search_space <- ps(
+  eta = p_dbl(lower = .001, upper = .2),
+  max_depth = p_int(lower = 1, upper = 10),
+  # max_delta_step = p_int(lower = 1,upper = 10),
+  alpha = p_dbl(lower = 0,upper = 0.5),
+  lambda = p_dbl(lower = 0,upper = 1),
+  gamma = p_int(lower = 0,upper = 6),
+  min_child_weight = p_int(lower = 1, upper = 10),
+  subsample = p_dbl(lower = .8, upper = 1)
+  # colsample_bytree = p_dbl( lower = .5, upper = 1)
+  # colsample_bylevel = p_dbl(lower = .5, upper = 1)
+)
+
+instance = tune(
+  tuner = mlr3tuning::tnr("random_search",batch_size = 10),
+  task = tsk_train,
+  learner = learner,
+  search_space = search_space,
+  resampling = rsmp("cv", folds = 5),
+  measures = msr("classif.auc"),
+  terminator = trm("stagnation", iters = 200, threshold = 0.01)
+)
+
+```
+
+
+## 2.4 Final model
+
+Update the model again to get the final model.
+
+```{r,eval=FALSE}
+
+# Model parameter update
+set.seed(2025)
+learner$param_set$values = instance$result_learner_param_vals
+
+learner$train(tsk_train)
+
+saveRDS(learner,file = "../data/xgboost_model.rds")
+```
+
+
+AUC and PR AUC of the model on the training set.
+
+```{r,eval=FALSE}
+trainres <- learner$predict(tsk_train)
+
+auc_value <- trainres$score(msr("classif.auc"))
+autoplot(trainres, type = "roc")+
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  geom_text(aes(x = 0.6, y = 0.2, label = paste("XGBoost AUC = ", round(auc_value, 4))), 
+            color = "black", size = 4) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title = element_text(size = 10),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom"
+  ) +
+  labs(title = "XGBoost ROC Curve")
+
+
+auc_value <- trainres$score(msr("classif.prauc"))
+autoplot(trainres, type = "prc")+
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  geom_text(aes(x = 0.6, y = 0.2, label = paste("XGBoost PRAUC = ", round(auc_value, 2))),
+            color = "black",size = 4) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title = element_text(size =10),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom"
+  ) +
+  labs(title = "XGBoost PR Curve")
+
+```
+
+
+Feature importance.
+
+```{r,eval=FALSE}
+importance = as.data.table(learner$importance(), keep.rownames = TRUE)
+colnames(importance) = c("Feature", "Importance")
+importance$Featurename <- featurename[importance$Feature]
+
+
+ggplot(data = importance, aes(x = reorder(Featurename, Importance), y = Importance)) + 
+  geom_col(fill = "#0073C2FF") +
+  coord_flip() +
+  xlab("") + 
+  ylab("Importance") +
+  ggtitle("Feature Importance") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title = element_text(size = 14),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    axis.ticks = element_line(color = "black")
+  )
+
+```
+
+
+## 2.5 cut-off
+
+```{r, eval=TRUE}
+
+library(tidyverse)
+library(cutpointr)
+
+data <- readRDS("../data/Prescore_lable_train.rds")
+
+data$res <- ifelse(data$`Response to chemotherapy`=="PD","Non response","response")
+
+set.seed(100)
+opt_cut_manual <- cutpointr(data=data, xgbscore, res, 
+                            direction = ">=", pos_class = "response",neg_class = "Non response",
+                            method = maximize_metric, 
+                            #method = spec_constrain,
+                            metric = accuracy,
+                            #cutpoint = mean(data$prediction), 
+                            boot_runs = 100)
+# cut-off
+opt_cut_manual$optimal_cutpoint
+
+
+plot_metric(opt_cut_manual)+
+  theme_bw()+
+  theme(panel.grid=element_blank())+
+  labs(title = "", x = "Threshold", y = "F1 score")+
+  geom_vline(xintercept = 0.58, color = "orange", linetype = "dashed")
+
+```
+
+
+
+
+## 2.6 Distribution of important features
+
+Distribution of important features in different datasets.
+
+```{r, eval=TRUE}
+library(ggpubr)
+library(patchwork)
+library(ggsci)
+
+allset_feature <- readRDS("../data/allset_feature.rds") %>% as.data.frame()
+featurename <- readRDS("../data/featurename.rds")
+allset_feature$batch <- factor(allset_feature$batch,levels = c("Train","Test1","Test2","Test3"))
+
+df <- allset_feature
+df$lable <- factor(allset_feature$lable,levels = c(0,1))
+
+colnames(df)[1:7] <- featurename[colnames(df)[1:7]]
+
+plots <- list()
+for (col in names(df)[1:7]) {
+    #p <- ggplot(df,aes_string(x = "batch", y =  paste0("`", col, "`"), color = "lable"))+
+    p <- ggplot(df, aes(x = batch, y = !!sym(col), color = lable)) + 
+    geom_boxplot(aes(color=lable),
+                 alpha=0.1,outlier.shape = NA)+
+    geom_jitter(position = position_jitterdodge(jitter.height=0.1,
+                                                jitter.width = 0.3,
+                                                dodge.width = 0.5),
+      size = 0.4)+ 
+    scale_color_manual(values = c("#1e56a0","#f95959"))+
+    #scale_fill_manual(values = c("#1e56a0","#f95959"))+
+    theme_bw()+
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1))+
+    stat_compare_means(aes(group = lable), 
+                       method ="wilcox.test",
+                                label="p.signif",
+                                show.legend = F)+
+    xlab("")
+  
+  plots[[col]] <- p
+}
+
+combined_plot <- wrap_plots(plots, ncol = )+
+  plot_layout(guides = "collect") & theme(legend.position = "bottom") 
+
+combined_plot
+
+dev.off()
+```
+
+
+
+
+
+

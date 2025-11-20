@@ -1,0 +1,172 @@
+---
+title: "PART 5: Overall survival"
+author: ["Jinyu Wang, Xue-Song Liu (Corresponding author)"]
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    self_contained: false
+    # toc_depth: 3
+# bibliography: ref.bib
+link-citations: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+Exploring the Predictive Performance of CNA fingerprint for Patient Overall Survival.
+
+Test3 cohort doesn't have enough information for overall survival.
+
+```{r,eval=TRUE}
+library(survival)
+library(survminer)
+library(tidyr)
+
+rm(list = ls())
+
+```
+
+## Overall Survival of test1 and test2 cohort
+
+```{r,eval=TRUE,out.width="80%", fig.align='center'}
+library(dplyr)
+
+test_all <- read.csv("../data/all_test.csv",check.names = F)
+
+data <- test_all %>%
+  filter(batch=="Test1") %>%
+  mutate(prediction = factor(ifelse(CNAfingerprint > 0.58,"Responder","Non-responder"),
+                             levels = c("Non-responder","Responder")),
+         OS = OS/30)
+
+fit <- survfit(Surv(`OS`, `OS_event`) ~ prediction, data =na.omit(data[,13:15]))
+
+ggsurvplot(
+  fit,
+  data = data[,13:15],
+  size = 1,
+  conf.int = TRUE,
+  pval = TRUE,
+  pval.method = TRUE,
+  risk.table = TRUE,
+  palette =c("#3d6cb9", "#bc5148"),
+  risk.table.height = 0.25,
+  ggtheme = theme_classic2(),
+  xlab = "Months"
+)
+```
+
+
+```{r,eval=TRUE,out.width="80%", fig.align='center'}
+data <- test_all %>%
+  filter(batch=="Test2") %>%
+  mutate(prediction = factor(ifelse(CNAfingerprint > 0.58,"Responder","Non-responder"),
+                             levels = c("Non-responder","Responder")),
+         OS = OS/30)
+
+fit <- survfit(Surv(`OS`, `OS_event`) ~ prediction, data =na.omit(data[,13:15]))
+
+ggsurvplot(
+  fit,
+  data = data[,13:15],
+  size = 1,
+  conf.int = TRUE,
+  pval = TRUE,
+  pval.method = TRUE,
+  risk.table = TRUE,
+  palette =c("#3d6cb9", "#bc5148"),
+  risk.table.height = 0.25,
+  ggtheme = theme_classic2(),
+  xlab = "Months"
+)
+```
+
+## Overall Survival of GSE36864 cohort
+
+GSE36864,	aCGH data of colorectal cancers of patients from 2 clinical trials (CAIRO, CAIRO2). 105 patients were treated with capecitabine first line (CAIRO arm A), 111 patients were treated with capecitabine and irinotecan first line (CAIRO arm B), and 133 patients were treated with capecitabine, oxaliplatin and bevacizumab (CAIRO2 arm A).
+
+
+
+```{r}
+data <- readRDS("../data/GSE36864_clin.rds")
+
+data$OS_event <- ifelse(data$`progression:ch1`=="yes",1,0)
+colnames(data)[3] <- "OS"
+data$OS <- as.numeric(data$OS)/30
+data$prediction <- ifelse(data$CNAfingerprint>0.58,1,0)
+```
+
+
+Survival of patients with oxaliplatin-based regimens  (GSE36864 cohort, CAIRO2 arm A).
+
+```{r}
+df <- data[which(data$`study:ch1`=="CAIRO2"),]
+
+fit <- survfit(Surv(`OS`, `OS_event`) ~ prediction, data =na.omit(df))
+
+ggsurvplot(
+  fit,
+  data = df,
+  size = 1,
+  conf.int = TRUE,
+  pval = TRUE,
+  pval.method = TRUE,
+  risk.table = TRUE,
+  palette =c("#3d6cb9", "#bc5148"),
+  risk.table.height = 0.25,
+  ggtheme = theme_classic2(),
+  xlab = "Months"
+)
+```
+
+Survival of patients without oxaliplatin-based regimens  (GSE36864 cohort, CAIRO).
+
+```{r}
+df <- data[which(data$`study:ch1`=="CAIRO"),]
+
+fit <- survfit(Surv(`OS`, `OS_event`) ~ prediction, data =na.omit(df))
+
+ggsurvplot(
+  fit,
+  data = df,
+  size = 1,
+  conf.int = TRUE,
+  pval = TRUE,
+  pval.method = TRUE,
+  risk.table = TRUE,
+  palette =c("#3d6cb9", "#bc5148"),
+  risk.table.height = 0.25,
+  ggtheme = theme_classic2(),
+  xlab = "Months"
+)
+```
+
+
+
+
+## Overall Survival of no-oxaliplatin cohort
+
+```{r,eval=TRUE,out.width="100%", fig.align='center'}
+noOxa_cohort <- readRDS("../data/noOxa_cohort.rds")
+data <- na.omit(noOxa_cohort)
+data$group <- factor(ifelse(data$CNAfingerprint > 0.58,"Responder","Non-responder"),
+                     levels = c("Non-responder","Responder"))
+
+fit <- survfit(Surv(`OS`, `OS_event`) ~ group, data =data)
+
+
+ggsurvplot(
+  fit,
+  data = data,
+  size = 1,
+  conf.int = TRUE,
+  pval = TRUE,
+  pval.method = TRUE,
+  risk.table = TRUE,
+  palette =c("#3d6cb9", "#bc5148"),
+  risk.table.height = 0.25,
+  ggtheme = theme_classic2(),
+  xlab = "Months"
+)
+
+```
+

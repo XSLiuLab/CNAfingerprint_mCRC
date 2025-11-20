@@ -1,0 +1,97 @@
+---
+title: "Copy number alteration fingerprint predicts the clinical response of oxaliplatin-based chemotherapy in metastatic colorectal cancer"
+author: ["Junyong Weng; Jinyu Wang; Ziyu Tao; Tao Wu; Nan Wang; Zilan Ye; Ruoxin Zhang; XinXing Li; Jinyu Wang; Jiayu Shen, Xiangyu Zhao; Xinxin Li*; Xinxiang Li*; and Xue-Song Liu*"]
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+  self_contained: false
+toc_depth: 3
+gallery: true
+thumbnails: false
+use_bookdown: true
+# bibliography: ref.bib
+link-citations: yes
+---
+  
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+## Global options
+options(max.print = "75")
+opts_chunk$set(
+  echo = FALSE,
+  cache = FALSE,
+  prompt = FALSE,
+  tidy = "styler",
+  comment = NA,
+  dpi = 300,
+  message = FALSE,
+  warning = FALSE,
+  echo = TRUE,
+  fig.align = "center"
+)
+opts_knit$set(width = 75)
+Sys.setenv("LANGUAGE" = "EN")
+.regenerate_pdfs = FALSE # run some code chunks which generate a batch of pdf figures.
+```
+
+<br>
+  
+**EQUAL CONTRIBUTION**
+
+J.W., J.W., Z.T. and T.W. contributed equally to this work as joint first authors.
+
+X.L., X.L. and X.S.L contributed equally to this work as joint senior authors.
+
+
+# Introduction
+
+Oxaliplatin-based chemotherapy is routinely used in metastatic colorectal cancer (mCRC) patient, however only about half of patients show clinical response after therapy. Accurate biomarkers for predicting oxaliplatin chemotherapy clinical response are still lacking. Here we developed and validated a tumor genomic DNA copy number alteration (CNA) based biomarker.
+
+In total 271 mCRC patients who underwent primary tumor resection and postoperatively treated with oxaliplatin-based chemotherapy are included in this study. Tissue samples and their clinical data were obtained from the Fudan University Shanghai Cancer Center (FUSCC) and Tongji Hospital of Tongji University. The sample selection criteria are detailed here.
+
+```{r, echo=FALSE, out.width="100%", fig.align='center'}
+library(knitr)
+include_graphics("../pic/Figure1.png")
+```
+
+# PART 1: Data preprocessing
+
+```{r, child="01-preprocessing.Rmd"}
+```
+
+# PART 2: Model training
+
+```{r, child="02-model-training.Rmd"}
+```
+
+# PART 3: Model evaluation
+
+```{r, child="03-model-evaluation.Rmd"}
+```
+
+# PART 4: Biomarker comparison
+
+```{r, child="04-biomarker-comparison.Rmd"}
+```
+
+# PART 5: Overall survival 
+
+```{r, child="05-overall-survival.Rmd"}
+```
+
+# Acknowledgments
+
+We thank Fudan University Shanghai Cancer Center and Tongji hospital of Tongji University for sample collection;
+
+We thank ShanghaiTech University High Performance Computing Public Service Platform for computing services. We thank multi-omics facility, molecular and cell biology core facility of ShanghaiTech University for technical help.
+
+# LICENSE
+  
+If you want to reuse the code in this report, please note the license below should be followed.
+
+The code is made available for non commercial research purposes only under the MIT. However, notwithstanding any provision of the MIT License, the software currently may not be used for commercial purposes without explicit written permission after contacting Jinyu Wang[wangjy10\@shanghaitech.edu.cn](mailto:wangjy10@shanghaitech.edu.cn){.email} or Tiyu Tao[taozy\@shanghaitech.edu.cn](mailto:taozy@shanghaitech.edu.cn){.email} or Xue-Song Liu [liuxs\@shanghaitech.edu.cn](mailto:liuxs@shanghaitech.edu.cn){.email}.
+
